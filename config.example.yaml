@@ -1,0 +1,45 @@
+server:
+  # 默认只监听本机，适合旧系统和本服务跑在同一台机器上。
+  listen: 127.0.0.1:2525
+  hostname: oauth2smtp.local
+  message_size_limit: 26214400
+  # 如需 STARTTLS，取消下面两行注释并填写证书路径。
+  # tls_cert_file: /path/to/cert.pem
+  # tls_key_file: /path/to/key.pem
+
+graph:
+  base_url: https://graph.microsoft.com/v1.0
+
+oauth:
+  # 单租户可填写 tenant id；多租户/个人账号测试可用 common。
+  tenant_id: common
+  client_id: YOUR_MICROSOFT_ENTRA_APP_CLIENT_ID
+  # 留空表示使用公共客户端 + PKCE；如果应用注册是 Web/confidential client，则填写 client secret。
+  # client_secret: YOUR_CLIENT_SECRET
+  # 必须和 Microsoft Entra 应用注册里的 Redirect URI 完全一致。
+  redirect_uri: http://127.0.0.1:8080/callback
+  scopes:
+    - offline_access
+    - https://graph.microsoft.com/Mail.Send
+    # 如果要用共享邮箱/其他用户身份发送，通常还需要这个 delegated permission，
+    # 并在 Exchange Online 侧配置 Send As 或 Send on Behalf。
+    # - https://graph.microsoft.com/Mail.Send.Shared
+
+accounts:
+  - name: work
+    # 旧系统连接本服务时使用的 SMTP 用户名和密码。
+    smtp_username: legacy-user
+    smtp_password: legacy-password
+    # OAuth 授权对应的主邮箱。
+    email: user@example.com
+    # 允许出现在 SMTP envelope sender 或 MIME From 中的发件地址。
+    allowed_from:
+      - user@example.com
+      - alias@example.com
+      - shared@example.com
+    # 可选：特定 From 走 /users/{graph_user}/sendMail。
+    alias_routes:
+      - from: shared@example.com
+        graph_user: shared@example.com
+    # token 会由 `oauth2smtp account auth --config config.yaml --name work` 写入。
+    token: {}

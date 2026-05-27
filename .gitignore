@@ -1,0 +1,29 @@
+# Local binaries
+/oauth2smtp
+/oauth2smtp.exe
+
+# Build output
+/bin/
+/dist/
+/build/
+*.test
+*.out
+coverage.out
+
+# Local config with SMTP passwords, OAuth tokens, and client secrets
+/config.yaml
+/config.*.yaml
+!/config.example.yaml
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
