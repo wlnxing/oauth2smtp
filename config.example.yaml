@@ -1,5 +1,5 @@
 server:
-  # 默认只监听本机，适合旧系统和本服务跑在同一台机器上。
+  # 默认只监听本机，适合同机或受控内网使用。
   listen: 127.0.0.1:2525
   hostname: oauth2smtp.local
   message_size_limit: 26214400
@@ -17,7 +17,7 @@ oauth:
   # 留空表示使用公共客户端 + PKCE；如果应用注册是 Web/confidential client，则填写 client secret。
   # client_secret: YOUR_CLIENT_SECRET
   # 必须和 Microsoft Entra 应用注册里的 Redirect URI 完全一致。
-  redirect_uri: http://127.0.0.1:8080/callback
+  redirect_uri: http://localhost:8080/callback
   scopes:
     - offline_access
     - https://graph.microsoft.com/Mail.Send
@@ -27,19 +27,20 @@ oauth:
 
 accounts:
   - name: work
-    # 旧系统连接本服务时使用的 SMTP 用户名和密码。
+    # SMTP 客户端连接本服务时使用的用户名和密码。
     smtp_username: legacy-user
     smtp_password: legacy-password
     # OAuth 授权对应的主邮箱。
     email: user@example.com
-    # 允许出现在 SMTP envelope sender 或 MIME From 中的发件地址。
-    allowed_from:
-      - user@example.com
-      - alias@example.com
-      - shared@example.com
+    # 可选：允许出现在 SMTP envelope sender 或 MIME From 中的发件地址。
+    # 不配置时，默认允许 email 这个主邮箱。
+    # allowed_from:
+    #   - user@example.com
+    #   - alias@example.com
+    #   - shared@example.com
     # 可选：特定 From 走 /users/{graph_user}/sendMail。
-    alias_routes:
-      - from: shared@example.com
-        graph_user: shared@example.com
+    # alias_routes:
+    #   - from: shared@example.com
+    #     graph_user: shared@example.com
     # token 会由 `oauth2smtp account auth --config config.yaml --name work` 写入。
     token: {}

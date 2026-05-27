@@ -129,6 +129,82 @@ func TestSMTPRejectsUnauthorizedFrom(t *testing.T) {
 	}
 }
 
+func TestBackgroundRefreshUpdatesAccessAndRefreshToken(t *testing.T) {
+	var tokenRequests int
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/common/oauth2/v2.0/token" {
+			t.Fatalf("unexpected token path %s", r.URL.Path)
+		}
+		tokenRequests++
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		if got := r.Form.Get("refresh_token"); got != "old-refresh" {
+			t.Fatalf("refresh_token = %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"access_token":"new-access","refresh_token":"new-refresh","token_type":"Bearer","expires_in":3600,"scope":"offline_access https://graph.microsoft.com/Mail.Send"}`)
+	}))
+	defer tokenSrv.Close()
+
+	cfg := config.Default()
+	cfg.OAuth.ClientID = "client"
+	cfg.OAuth.RedirectURI = "https://auth.example.com/callback"
+	cfg.OAuth.TokenURL = tokenSrv.URL + "/common/oauth2/v2.0/token"
+	cfg.Accounts = []config.Account{
+		{
+			Name:         "work",
+			SMTPUsername: "legacy",
+			SMTPPassword: "secret",
+			Email:        "user@example.com",
+			Token: config.Token{
+				AccessToken:  "old-access",
+				RefreshToken: "old-refresh",
+				TokenType:    "Bearer",
+				Expiry:       time.Now().Add(5 * time.Minute),
+			},
+		},
+		{
+			Name:         "not-authorized",
+			SMTPUsername: "skip",
+			SMTPPassword: "secret",
+			Email:        "skip@example.com",
+			Token: config.Token{
+				AccessToken: "skip-access",
+				Expiry:      time.Now().Add(5 * time.Minute),
+			},
+		},
+	}
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	relay := New(path, cfg, log.New(io.Discard, "", 0), tokenSrv.Client())
+	refreshed, skipped, failed := relay.refreshExpiringTokensOnce(context.Background(), 10*time.Minute)
+	if refreshed != 1 || skipped != 1 || failed != 0 {
+		t.Fatalf("refreshed=%d skipped=%d failed=%d", refreshed, skipped, failed)
+	}
+	if tokenRequests != 1 {
+		t.Fatalf("token requests = %d", tokenRequests)
+	}
+
+	loaded, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acc := loaded.FindAccountByName("work")
+	if acc == nil {
+		t.Fatal("work account missing")
+	}
+	if acc.Token.AccessToken != "new-access" {
+		t.Fatalf("access token = %q", acc.Token.AccessToken)
+	}
+	if acc.Token.RefreshToken != "new-refresh" {
+		t.Fatalf("refresh token = %q", acc.Token.RefreshToken)
+	}
+}
+
 func testConfig(t *testing.T, graphURL string) (string, *config.Config) {
 	t.Helper()
 	cfg := config.Default()

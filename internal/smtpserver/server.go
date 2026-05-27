@@ -23,6 +23,12 @@ import (
 	"oauth2smtp/internal/oauthms"
 )
 
+const (
+	backgroundRefreshInterval = 30 * time.Minute
+	backgroundRefreshSkew     = 10 * time.Minute
+	sendRefreshSkew           = time.Minute
+)
+
 type Relay struct {
 	configPath string
 	cfg        *config.Config
@@ -70,6 +76,7 @@ func (r *Relay) ListenAndServe(ctx context.Context) error {
 	}
 
 	errCh := make(chan error, 1)
+	go r.runTokenRefreshLoop(ctx, backgroundRefreshInterval, backgroundRefreshSkew)
 	go func() {
 		r.logger.Printf("smtp listening on %s", s.Addr)
 		errCh <- s.ListenAndServe()
@@ -115,6 +122,34 @@ func (r *Relay) smtpServer() (*smtp.Server, error) {
 		s.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
 	}
 	return s, nil
+}
+
+func (r *Relay) runTokenRefreshLoop(ctx context.Context, interval, skew time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	r.refreshExpiringTokens(ctx, skew)
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			r.refreshExpiringTokens(ctx, skew)
+		}
+	}
+}
+
+func (r *Relay) refreshExpiringTokens(ctx context.Context, skew time.Duration) {
+	refreshCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	refreshed, skipped, failed := r.refreshExpiringTokensOnce(refreshCtx, skew)
+	if refreshed > 0 || failed > 0 {
+		r.logger.Printf("oauth background refresh complete refreshed=%d skipped=%d failed=%d", refreshed, skipped, failed)
+	}
 }
 
 func (r *Relay) NewSession(c *smtp.Conn) (smtp.Session, error) {
@@ -269,7 +304,7 @@ func (r *Relay) ensureAccessToken(ctx context.Context, name string) error {
 	if acc == nil {
 		return fmt.Errorf("account %q no longer exists", name)
 	}
-	changed, err := oauthms.EnsureAccessToken(ctx, r.cfg.OAuth, acc, r.httpClient, false)
+	changed, err := oauthms.EnsureAccessTokenWithSkew(ctx, r.cfg.OAuth, acc, r.httpClient, false, sendRefreshSkew)
 	if err != nil {
 		return err
 	}
@@ -280,6 +315,46 @@ func (r *Relay) ensureAccessToken(ctx context.Context, name string) error {
 		r.logger.Printf("oauth token refreshed account=%s", name)
 	}
 	return nil
+}
+
+func (r *Relay) refreshExpiringTokensOnce(ctx context.Context, skew time.Duration) (refreshed, skipped, failed int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if err := r.reloadLocked(); err != nil {
+		r.logger.Printf("oauth background refresh skipped: config reload failed: %v", err)
+		return 0, 0, 1
+	}
+
+	changed := false
+	for i := range r.cfg.Accounts {
+		acc := &r.cfg.Accounts[i]
+		if acc.Token.RefreshToken == "" {
+			skipped++
+			continue
+		}
+		tokenChanged, err := oauthms.EnsureAccessTokenWithSkew(ctx, r.cfg.OAuth, acc, r.httpClient, false, skew)
+		if err != nil {
+			failed++
+			r.logger.Printf("oauth background refresh failed account=%s error=%v", acc.Name, err)
+			continue
+		}
+		if tokenChanged {
+			refreshed++
+			changed = true
+			r.logger.Printf("oauth token refreshed account=%s", acc.Name)
+		} else {
+			skipped++
+		}
+	}
+
+	if changed {
+		if err := config.Save(r.configPath, r.cfg); err != nil {
+			failed++
+			r.logger.Printf("oauth background refresh save failed: %v", err)
+		}
+	}
+	return refreshed, skipped, failed
 }
 
 func (r *Relay) reloadLocked() error {

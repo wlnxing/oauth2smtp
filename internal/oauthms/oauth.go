@@ -130,13 +130,17 @@ func NeedsRefresh(tok config.Token, now time.Time, skew time.Duration) bool {
 }
 
 func EnsureAccessToken(ctx context.Context, oauth config.OAuthConfig, acc *config.Account, client *http.Client, force bool) (bool, error) {
+	return EnsureAccessTokenWithSkew(ctx, oauth, acc, client, force, time.Minute)
+}
+
+func EnsureAccessTokenWithSkew(ctx context.Context, oauth config.OAuthConfig, acc *config.Account, client *http.Client, force bool, skew time.Duration) (bool, error) {
 	if client == nil {
 		client = http.DefaultClient
 	}
 	if acc == nil {
 		return false, errors.New("account is nil")
 	}
-	if !force && !NeedsRefresh(acc.Token, time.Now(), time.Minute) {
+	if !force && !NeedsRefresh(acc.Token, time.Now(), skew) {
 		return false, nil
 	}
 	if acc.Token.RefreshToken == "" {
@@ -273,7 +277,7 @@ func refreshToken(ctx context.Context, oauth config.OAuthConfig, refresh string,
 }
 
 func postTokenForm(ctx context.Context, oauth config.OAuthConfig, form url.Values, client *http.Client) (config.Token, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/%s/oauth2/v2.0/token", loginBase, tenant(oauth)), strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL(oauth), strings.NewReader(form.Encode()))
 	if err != nil {
 		return config.Token{}, err
 	}
@@ -348,6 +352,13 @@ func tenant(oauth config.OAuthConfig) string {
 		return "common"
 	}
 	return url.PathEscape(t)
+}
+
+func tokenURL(oauth config.OAuthConfig) string {
+	if strings.TrimSpace(oauth.TokenURL) != "" {
+		return strings.TrimSpace(oauth.TokenURL)
+	}
+	return fmt.Sprintf("%s/%s/oauth2/v2.0/token", loginBase, tenant(oauth))
 }
 
 func randomURLToken(n int) (string, error) {

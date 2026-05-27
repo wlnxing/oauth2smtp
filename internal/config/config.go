@@ -39,6 +39,7 @@ type OAuthConfig struct {
 	ClientSecret string   `yaml:"client_secret,omitempty"`
 	RedirectURI  string   `yaml:"redirect_uri"`
 	Scopes       []string `yaml:"scopes,omitempty"`
+	TokenURL     string   `yaml:"token_url,omitempty"`
 }
 
 type GraphConfig struct {
