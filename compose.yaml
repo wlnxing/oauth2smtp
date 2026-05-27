@@ -1,9 +1,6 @@
 services:
   oauth2smtp:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: oauth2smtp:local
+    image: ghcr.io/wlnxing/oauth2smtp:latest
     container_name: oauth2smtp
     restart: always
     ports:
