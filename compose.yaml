@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     image: oauth2smtp:local
     container_name: oauth2smtp
-    restart: unless-stopped
+    restart: always
     ports:
       - "2525:2525"
     volumes:

@@ -6,6 +6,7 @@
 /bin/
 /dist/
 /build/
+/rootfs/
 *.test
 *.out
 coverage.out

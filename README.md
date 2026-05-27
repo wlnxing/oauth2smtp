@@ -14,6 +14,13 @@ Docker/Podman 构建：
 podman compose build
 ```
 
+发布镜像由 GitHub Actions 在 tag 推送时构建并推送到 GitHub Packages：
+
+```text
+ghcr.io/OWNER/REPO:vX.Y.Z
+ghcr.io/OWNER/REPO:latest
+```
+
 容器运行时请把配置里的 `server.listen` 设置为 `0.0.0.0:2525`，这样端口映射才能从宿主机访问：
 
 ```yaml
@@ -26,6 +33,15 @@ server:
 ```sh
 podman compose up -d
 ```
+
+发布版本：
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+tag 推送后会自动生成 GitHub Release，并上传 Linux/macOS/Windows 的 amd64/arm64 二进制包和校验文件。
 
 
 ## 使用

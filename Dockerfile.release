@@ -1,0 +1,18 @@
+ARG BUILDPLATFORM
+FROM --platform=$BUILDPLATFORM alpine:3.20 AS certs
+
+RUN apk add --no-cache ca-certificates && mkdir -p /config
+
+FROM scratch
+
+ARG TARGETOS
+ARG TARGETARCH
+
+COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=certs /config /config
+COPY dist/oauth2smtp-${TARGETOS}-${TARGETARCH} /usr/local/bin/oauth2smtp
+
+EXPOSE 2525
+
+ENTRYPOINT ["/usr/local/bin/oauth2smtp"]
+CMD ["serve", "--config", "/config/config.yaml"]

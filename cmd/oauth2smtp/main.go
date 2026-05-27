@@ -18,6 +18,8 @@ import (
 	"oauth2smtp/internal/smtpserver"
 )
 
+var version = "dev"
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
@@ -38,6 +40,9 @@ func run(args []string) error {
 		return runAccount(args[1:])
 	case "help", "-h", "--help":
 		printUsage()
+		return nil
+	case "version":
+		fmt.Println(version)
 		return nil
 	default:
 		printUsage()
@@ -250,7 +255,8 @@ func parseAliasRoutes(s string) ([]config.AliasRoute, error) {
 func printUsage() {
 	fmt.Fprintln(os.Stderr, `Usage:
   oauth2smtp serve --config config.yaml
-  oauth2smtp account <add|auth|set-password|list> [options]`)
+  oauth2smtp account <add|auth|set-password|list> [options]
+  oauth2smtp version`)
 }
 
 func printAccountUsage() {
