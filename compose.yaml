@@ -1,0 +1,12 @@
+services:
+  oauth2smtp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: oauth2smtp:local
+    container_name: oauth2smtp
+    restart: unless-stopped
+    ports:
+      - "2525:2525"
+    volumes:
+      - ./config.yaml:/config/config.yaml:rw

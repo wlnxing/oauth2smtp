@@ -1,0 +1,16 @@
+.git
+.agents
+.codex
+
+oauth2smtp
+*.test
+coverage.out
+
+config.yaml
+config.*.yaml
+!config.example.yaml
+
+.DS_Store
+Thumbs.db
+.idea
+.vscode

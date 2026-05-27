@@ -8,6 +8,25 @@
 go build ./cmd/oauth2smtp
 ```
 
+Docker/Podman 构建：
+
+```sh
+podman compose build
+```
+
+容器运行时请把配置里的 `server.listen` 设置为 `0.0.0.0:2525`，这样端口映射才能从宿主机访问：
+
+```yaml
+server:
+  listen: 0.0.0.0:2525
+```
+
+启动：
+
+```sh
+podman compose up -d
+```
+
 
 ## 使用
 
