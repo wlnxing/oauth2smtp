@@ -44,3 +44,28 @@ port: 2525
 username: config.yaml 中的 smtp_username
 password: config.yaml 中的 smtp_password
 ```
+
+如果 SMTP 客户端提示 `unencrypted connection`，通常表示客户端拒绝在非 TLS 连接上发送认证信息。测试时请使用 `localhost` 或 `127.0.0.1` 连接；如果通过 IP、域名、容器端口映射或远程机器访问，请配置 STARTTLS：
+
+```yaml
+server:
+  tls_cert_file: /path/to/cert.pem
+  tls_key_file: /path/to/key.pem
+```
+
+如需 SMTPS / 隐式 TLS，额外配置 `smtps_listen`。该端口会在连接建立时立即进行 TLS 握手；配置 `smtps_listen` 时必须同时配置证书：
+
+```yaml
+server:
+  smtps_listen: 0.0.0.0:465
+  tls_cert_file: /path/to/cert.pem
+  tls_key_file: /path/to/key.pem
+```
+
+容器部署时如果要开放 SMTPS，需要额外映射端口：
+
+```yaml
+ports:
+  - "2525:2525"
+  - "465:465"
+```

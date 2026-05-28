@@ -74,6 +74,10 @@ func (r *Relay) ListenAndServe(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	smtps, err := r.smtpsServer()
+	if err != nil {
+		return err
+	}
 
 	errCh := make(chan error, 1)
 	go r.runTokenRefreshLoop(ctx, backgroundRefreshInterval, backgroundRefreshSkew)
@@ -81,27 +85,43 @@ func (r *Relay) ListenAndServe(ctx context.Context) error {
 		r.logger.Printf("smtp listening on %s", s.Addr)
 		errCh <- s.ListenAndServe()
 	}()
+	if smtps != nil {
+		go func() {
+			r.logger.Printf("smtps listening on %s", smtps.Addr)
+			errCh <- smtps.ListenAndServeTLS()
+		}()
+	}
 
 	select {
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := s.Shutdown(shutdownCtx); err != nil {
-			return err
-		}
-		return nil
+		return shutdownServers(10*time.Second, s, smtps)
 	case err := <-errCh:
 		if errors.Is(err, smtp.ErrServerClosed) {
 			return nil
 		}
+		_ = shutdownServers(10*time.Second, s, smtps)
 		return err
 	}
 }
 
 func (r *Relay) smtpServer() (*smtp.Server, error) {
+	return r.newSMTPServer(r.cfg.Server.Listen)
+}
+
+func (r *Relay) smtpsServer() (*smtp.Server, error) {
+	if r.cfg.Server.SMTPSListen == "" {
+		return nil, nil
+	}
+	if r.cfg.Server.TLSCertFile == "" || r.cfg.Server.TLSKeyFile == "" {
+		return nil, errors.New("server.smtps_listen requires both server.tls_cert_file and server.tls_key_file")
+	}
+	return r.newSMTPServer(r.cfg.Server.SMTPSListen)
+}
+
+func (r *Relay) newSMTPServer(addr string) (*smtp.Server, error) {
 	r.cfg.ApplyDefaults()
 	s := smtp.NewServer(r)
-	s.Addr = r.cfg.Server.Listen
+	s.Addr = addr
 	s.Domain = r.cfg.Server.Hostname
 	s.MaxMessageBytes = r.cfg.Server.MessageSizeLimit
 	s.MaxRecipients = 200
@@ -122,6 +142,22 @@ func (r *Relay) smtpServer() (*smtp.Server, error) {
 		s.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
 	}
 	return s, nil
+}
+
+func shutdownServers(timeout time.Duration, servers ...*smtp.Server) error {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	var errs []error
+	for _, server := range servers {
+		if server == nil {
+			continue
+		}
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (r *Relay) runTokenRefreshLoop(ctx context.Context, interval, skew time.Duration) {

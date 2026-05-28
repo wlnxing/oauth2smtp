@@ -27,6 +27,7 @@ type Config struct {
 
 type ServerConfig struct {
 	Listen           string `yaml:"listen"`
+	SMTPSListen      string `yaml:"smtps_listen,omitempty"`
 	Hostname         string `yaml:"hostname"`
 	TLSCertFile      string `yaml:"tls_cert_file,omitempty"`
 	TLSKeyFile       string `yaml:"tls_key_file,omitempty"`

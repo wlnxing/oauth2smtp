@@ -3,13 +3,23 @@ package smtpserver
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/pem"
 	"io"
 	"log"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/smtp"
+	"net/textproto"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -23,6 +33,79 @@ func TestHeaderFrom(t *testing.T) {
 	if got := HeaderFrom(data); got != "user@example.com" {
 		t.Fatalf("from = %q", got)
 	}
+}
+
+func TestEHLOAdvertisesSTARTTLSWhenCertConfigured(t *testing.T) {
+	certFile, keyFile := writeTestCert(t)
+	cfg := config.Default()
+	cfg.Server.TLSCertFile = certFile
+	cfg.Server.TLSKeyFile = keyFile
+
+	caps := ehloCapabilities(t, cfg)
+	if !strings.Contains(caps, "STARTTLS") {
+		t.Fatalf("EHLO capabilities did not advertise STARTTLS:\n%s", caps)
+	}
+}
+
+func TestEHLONoSTARTTLSWithoutCert(t *testing.T) {
+	cfg := config.Default()
+
+	caps := ehloCapabilities(t, cfg)
+	if strings.Contains(caps, "STARTTLS") {
+		t.Fatalf("EHLO capabilities unexpectedly advertised STARTTLS:\n%s", caps)
+	}
+}
+
+func TestSMTPSRequiresCertificate(t *testing.T) {
+	cfg := config.Default()
+	cfg.Server.SMTPSListen = "127.0.0.1:2465"
+
+	relay := New("", cfg, log.New(io.Discard, "", 0), nil)
+	_, err := relay.smtpsServer()
+	if err == nil {
+		t.Fatal("expected missing certificate error")
+	}
+	if !strings.Contains(err.Error(), "smtps_listen") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSMTPSImplicitTLS(t *testing.T) {
+	certFile, keyFile := writeTestCert(t)
+	cfg := config.Default()
+	cfg.Server.TLSCertFile = certFile
+	cfg.Server.TLSKeyFile = keyFile
+	cfg.Server.SMTPSListen = "127.0.0.1:0"
+
+	relay := New("", cfg, log.New(io.Discard, "", 0), nil)
+	srv, err := relay.smtpsServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := tls.Listen("tcp", srv.Addr, srv.TLSConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go srv.Serve(ln)
+	defer srv.Shutdown(context.Background())
+
+	conn, err := tls.Dial("tcp", ln.Addr().String(), &tls.Config{
+		ServerName:         "localhost",
+		InsecureSkipVerify: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	tp := textproto.NewConn(conn)
+	defer tp.Close()
+	if _, msg, err := tp.ReadResponse(220); err != nil {
+		t.Fatal(err)
+	} else if !strings.Contains(msg, cfg.Server.Hostname) {
+		t.Fatalf("unexpected greeting: %s", msg)
+	}
+	_ = tp.PrintfLine("QUIT")
 }
 
 func TestSMTPForwardingAndAuth(t *testing.T) {
@@ -241,4 +324,81 @@ func TestConstantTimeEqual(t *testing.T) {
 	if HeaderFrom(bytes.NewBufferString("not a message").Bytes()) != "" {
 		t.Fatal("unexpected from")
 	}
+}
+
+func ehloCapabilities(t *testing.T, cfg *config.Config) string {
+	t.Helper()
+
+	relay := New("", cfg, log.New(io.Discard, "", 0), nil)
+	srv, err := relay.smtpServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go srv.Serve(ln)
+	defer srv.Shutdown(context.Background())
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	tp := textproto.NewConn(conn)
+	defer tp.Close()
+	if _, _, err := tp.ReadResponse(220); err != nil {
+		t.Fatal(err)
+	}
+	if err := tp.PrintfLine("EHLO test.local"); err != nil {
+		t.Fatal(err)
+	}
+	_, caps, err := tp.ReadResponse(250)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = tp.PrintfLine("QUIT")
+	return caps
+}
+
+func writeTestCert(t *testing.T) (string, string) {
+	t.Helper()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "localhost"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{"localhost"},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	certFile := filepath.Join(dir, "cert.pem")
+	keyFile := filepath.Join(dir, "key.pem")
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	if err := os.WriteFile(certFile, certPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, keyPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return certFile, keyFile
 }
