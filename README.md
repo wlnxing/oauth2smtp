@@ -7,7 +7,8 @@
 准备配置文件 [config.yaml](./config.example.yaml)：
 
 ```sh
-cp config.example.yaml config.yaml
+mkdir config
+cp config.example.yaml config/config.yaml
 ```
 
 编辑 `config.yaml`，根据注释填写相关信息：

@@ -193,23 +193,68 @@ func (r *Relay) NewSession(c *smtp.Conn) (smtp.Session, error) {
 }
 
 func (s *session) AuthMechanisms() []string {
-	return []string{sasl.Plain}
+	return []string{sasl.Plain, sasl.Login}
 }
 
 func (s *session) Auth(mech string) (sasl.Server, error) {
-	if mech != sasl.Plain {
+	switch mech {
+	case sasl.Plain:
+		return sasl.NewPlainServer(func(identity, username, password string) error {
+			return s.authenticateSMTP(username, password)
+		}), nil
+	case sasl.Login:
+		return newLoginServer(func(username, password string) error {
+			return s.authenticateSMTP(username, password)
+		}), nil
+	default:
 		return nil, smtp.ErrAuthUnknownMechanism
 	}
-	return sasl.NewPlainServer(func(identity, username, password string) error {
-		acc, err := s.relay.authenticate(username, password)
-		if err != nil {
-			return smtp.ErrAuthFailed
+}
+
+func (s *session) authenticateSMTP(username, password string) error {
+	acc, err := s.relay.authenticate(username, password)
+	if err != nil {
+		return smtp.ErrAuthFailed
+	}
+	s.auth = true
+	s.accountName = acc.Name
+	s.relay.logger.Printf("smtp auth ok user=%s account=%s", username, acc.Name)
+	return nil
+}
+
+type loginServer struct {
+	authenticate func(username, password string) error
+	username     string
+	step         int
+	done         bool
+}
+
+func newLoginServer(authenticate func(username, password string) error) sasl.Server {
+	return &loginServer{authenticate: authenticate}
+}
+
+func (s *loginServer) Next(response []byte) ([]byte, bool, error) {
+	if s.done {
+		return nil, false, sasl.ErrUnexpectedClientResponse
+	}
+
+	switch s.step {
+	case 0:
+		if response == nil {
+			return []byte("Username:"), false, nil
 		}
-		s.auth = true
-		s.accountName = acc.Name
-		s.relay.logger.Printf("smtp auth ok user=%s account=%s", username, acc.Name)
-		return nil
-	}), nil
+		s.username = string(response)
+		s.step = 1
+		return []byte("Password:"), false, nil
+	case 1:
+		if response == nil {
+			return nil, false, sasl.ErrUnexpectedClientResponse
+		}
+		s.done = true
+		return nil, true, s.authenticate(s.username, string(response))
+	default:
+		return nil, false, sasl.ErrUnexpectedClientResponse
+	}
 }
 
 func (s *session) Mail(from string, opts *smtp.MailOptions) error {

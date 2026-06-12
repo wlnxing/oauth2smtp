@@ -11,6 +11,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"io"
 	"log"
 	"math/big"
@@ -53,6 +54,15 @@ func TestEHLONoSTARTTLSWithoutCert(t *testing.T) {
 	caps := ehloCapabilities(t, cfg)
 	if strings.Contains(caps, "STARTTLS") {
 		t.Fatalf("EHLO capabilities unexpectedly advertised STARTTLS:\n%s", caps)
+	}
+}
+
+func TestEHLOAdvertisesPlainAndLoginAuth(t *testing.T) {
+	cfg := config.Default()
+
+	caps := ehloCapabilities(t, cfg)
+	if !strings.Contains(caps, "AUTH PLAIN LOGIN") {
+		t.Fatalf("EHLO capabilities did not advertise AUTH PLAIN LOGIN:\n%s", caps)
 	}
 }
 
@@ -155,6 +165,46 @@ func TestSMTPForwardingAndAuth(t *testing.T) {
 			t.Fatal(err)
 		}
 	case <-time.After(10 * time.Millisecond):
+	}
+}
+
+func TestSMTPForwardingWithLoginAuth(t *testing.T) {
+	mime := "From: User <user@example.com>\r\nTo: dest@example.com\r\nSubject: Hi\r\n\r\nBody\r\n"
+	var graphCalled bool
+	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		graphCalled = true
+		if r.URL.Path != "/me/sendMail" {
+			t.Fatalf("graph path = %q", r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		graphMIME, _ := base64.StdEncoding.DecodeString(string(body))
+		if string(graphMIME) != mime {
+			t.Fatalf("MIME changed:\n%s", graphMIME)
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer graphSrv.Close()
+
+	cfgPath, cfg := testConfig(t, graphSrv.URL)
+	relay := New(cfgPath, cfg, log.New(io.Discard, "", 0), graphSrv.Client())
+	srv, err := relay.smtpServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go srv.Serve(ln)
+	defer srv.Shutdown(context.Background())
+
+	auth := loginAuth{username: "legacy", password: "secret"}
+	if err := smtp.SendMail(ln.Addr().String(), auth, "user@example.com", []string{"dest@example.com"}, []byte(mime)); err != nil {
+		t.Fatal(err)
+	}
+	if !graphCalled {
+		t.Fatal("Graph was not called")
 	}
 }
 
@@ -312,6 +362,29 @@ func testConfig(t *testing.T, graphURL string) (string, *config.Config) {
 		t.Fatal(err)
 	}
 	return path, cfg
+}
+
+type loginAuth struct {
+	username string
+	password string
+}
+
+func (a loginAuth) Start(server *smtp.ServerInfo) (string, []byte, error) {
+	return "LOGIN", nil, nil
+}
+
+func (a loginAuth) Next(fromServer []byte, more bool) ([]byte, error) {
+	if !more {
+		return nil, nil
+	}
+	switch string(fromServer) {
+	case "Username:":
+		return []byte(a.username), nil
+	case "Password:":
+		return []byte(a.password), nil
+	default:
+		return nil, errors.New("unexpected LOGIN challenge")
+	}
 }
 
 func TestConstantTimeEqual(t *testing.T) {
